@@ -1,7 +1,7 @@
 SYMBOLS = [
     "BTC/USDT:USDT",
-    "ETH/USDT:USDT",
-    "SOL/USDT:USDT",
+    # "ETH/USDT:USDT",
+    # "SOL/USDT:USDT",
     "ASTER/USDT:USDT",
 ]
 
