@@ -15,7 +15,6 @@ django-cors-headers==4.9.0
 djangorestframework==3.16.1
 djangorestframework_simplejwt==5.5.1
 frozenlist==1.8.0
-Flask==3.0.3
 idna==3.11
 multidict==6.7.1
 numpy==2.4.2
@@ -37,4 +36,3 @@ tzdata==2025.3
 urllib3==2.6.3
 whitenoise==6.11.0
 yarl==1.22.0
-gunicorn

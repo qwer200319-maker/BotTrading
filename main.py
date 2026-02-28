@@ -1,138 +1,209 @@
+# main.py — production-ready for Render (Background Worker or Web Service)
+#
+# ✅ Features:
+# - Stable infinite loop with backoff + jitter (prevents crash loops)
+# - Scans on 15m candle close by default (less spam + fewer API calls)
+# - Cooldown/dedup remains handled in notifier.py (if you already have it)
+# - Structured logging (Render shows logs in dashboard)
+# - Optional lightweight /health HTTP endpoint (works if you deploy as Web Service)
+#
+# Environment variables (set in Render dashboard):
+# - RUN_MODE: "worker" (default) or "web"
+# - PORT: (Render sets this automatically for web services)
+# - SCAN_ON_CANDLE_CLOSE: "1" (default) or "0"
+# - SCAN_INTERVAL_SECONDS: default 60 (used when SCAN_ON_CANDLE_CLOSE=0)
+#
+# Your existing env vars:
+# BITGET_API_KEY, BITGET_API_SECRET, BITGET_API_PASSPHRASE
+# TG_BOT_TOKEN, TG_CHAT_ID
+
 import os
 import time
 import random
-import threading
 import logging
+from datetime import datetime, timezone
+from threading import Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify
 
-from exchange import make_exchange, normalize_symbol, fetch_ohlcv_df
+from exchange import make_exchange, fetch_ohlcv_df
+from config import SYMBOLS, TIMEFRAMES, PARAMS
 from strategy import detect
 from notifier import cooldown_ok, send_telegram, format_signal
-from config import SYMBOLS, TIMEFRAMES, PARAMS
 
 # ---------------------------
 # Logging
 # ---------------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
 log = logging.getLogger("bot")
 
-# ---------------------------
-# Flask app (Render port binding)
-# ---------------------------
-app = Flask(__name__)
-
-@app.get("/")
-def home():
-    return jsonify({"ok": True, "service": "bitget-swing-bot", "status": "running"})
-
-@app.get("/health")
-def health():
-    return jsonify({"ok": True})
 
 # ---------------------------
-# Data cache (reduce API calls)
+# Optional health server (for Render Web Service)
 # ---------------------------
-CACHE = {}  # key: (symbol_ccxt, tf) -> {"ts": epoch, "df": df}
-CACHE_TTL = {
-    "15m": 60,
-    "1h": 55 * 60,
-    "4h": int(3.8 * 3600)
-}
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path in ("/", "/health", "/healthz"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"ok")
+        else:
+            self.send_response(404)
+            self.end_headers()
 
-def get_df_cached(ex, symbol_ccxt: str, tf: str, limit: int = 300):
-    now = time.time()
-    key = (symbol_ccxt, tf)
-    ttl = CACHE_TTL.get(tf, 60)
+    def log_message(self, fmt, *args):
+        # reduce noisy HTTP logs
+        return
 
-    if key in CACHE and (now - CACHE[key]["ts"]) < ttl:
-        return CACHE[key]["df"]
 
-    df = fetch_ohlcv_df(ex, symbol_ccxt, tf, limit=limit)
-    CACHE[key] = {"ts": now, "df": df}
-    return df
+def start_health_server():
+    port = int(os.getenv("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    log.info(f"Health server listening on 0.0.0.0:{port}")
+    server.serve_forever()
+
 
 # ---------------------------
-# Scheduling
+# Scheduling helpers
 # ---------------------------
-def sleep_until_next_15m_close():
-    now = time.time()
-    seconds = 900 - (now % 900)
+def seconds_until_next_15m_close() -> int:
+    """
+    Returns seconds until the next 15-minute candle boundary (UTC).
+    Adds a small delay buffer (2-5s) to ensure candle is closed on exchange side.
+    """
+    now = datetime.now(timezone.utc)
+    minute = now.minute
+    # Next boundary at minute 0, 15, 30, 45
+    next_minute = ((minute // 15) + 1) * 15
+    next_hour = now.hour
+    next_day = now.date()
+
+    if next_minute >= 60:
+        next_minute = 0
+        next_hour += 1
+        if next_hour >= 24:
+            next_hour = 0
+            # move to next day (simple; datetime handles)
+            next_dt = datetime(
+                now.year, now.month, now.day, 0, 0, 0, tzinfo=timezone.utc
+            ) + (datetime.now(timezone.utc).date() - next_day)  # no-op
+            # easier: just add 1 hour and then round, but keep simple below
+
+    # Build next boundary datetime robustly by adding minutes until boundary
+    # Compute delta minutes to next boundary:
+    delta_minutes = (15 - (minute % 15)) % 15
+    if delta_minutes == 0:
+        delta_minutes = 15
+    target = now.replace(second=0, microsecond=0) + timedelta_minutes(delta_minutes)
+
+    # Add a small buffer to let exchange finalize candle
     buffer_sec = random.randint(2, 5)
-    wait = int(seconds) + buffer_sec
-    log.info(f"Sleeping until next 15m close: {wait}s")
-    time.sleep(max(5, wait))
+    wait = int((target - now).total_seconds()) + buffer_sec
+    return max(wait, 5)
+
+
+def timedelta_minutes(m: int):
+    # tiny helper to avoid importing timedelta at top (keeps it explicit)
+    from datetime import timedelta
+
+    return timedelta(minutes=m)
+
 
 # ---------------------------
-# One scan cycle
+# Core scan logic (one cycle)
 # ---------------------------
 def run_scan_cycle(ex):
-    for raw_symbol in SYMBOLS:
-        time.sleep(0.4 + random.random() * 0.7)  # stagger calls
-
+    """
+    Scans all symbols once. Exceptions are handled per symbol to avoid whole-bot crash.
+    """
+    for symbol in SYMBOLS:
         try:
-            symbol_ccxt = normalize_symbol(raw_symbol)
+            df15 = fetch_ohlcv_df(ex, symbol, TIMEFRAMES["entry"], limit=300)
+            df1h = fetch_ohlcv_df(ex, symbol, TIMEFRAMES["bias"], limit=300)
+            df4h = fetch_ohlcv_df(ex, symbol, TIMEFRAMES["regime"], limit=300)
 
-            df15 = get_df_cached(ex, symbol_ccxt, TIMEFRAMES["entry"], limit=300)
-            df1h = get_df_cached(ex, symbol_ccxt, TIMEFRAMES["bias"], limit=300)
-            df4h = get_df_cached(ex, symbol_ccxt, TIMEFRAMES["regime"], limit=300)
-
-            sig = detect(df15, df1h, df4h, symbol_ccxt, PARAMS)
+            sig = detect(df15, df1h, df4h, symbol, PARAMS)
             if not sig:
                 continue
 
-            key = f"{raw_symbol}:{sig.side}"
-            if cooldown_ok(key, PARAMS.get("cooldown_minutes", 15)):
-                msg = format_signal(sig, display_symbol=raw_symbol)
+            # Dedup / cooldown by symbol + side (simple)
+            key = f"{symbol}:{sig.side}"
+            if cooldown_ok(key, PARAMS.get("cooldown_minutes", 30)):
+                msg = format_signal(sig)
                 send_telegram(msg)
-                log.info(f"SENT | {raw_symbol} | {sig.side} | RR={sig.rr:.2f} | score={sig.score}")
+                log.info(f"SENT | {symbol} | {sig.side} | RR={sig.rr:.2f} | Score={sig.score}")
             else:
-                log.info(f"SKIP cooldown | {raw_symbol} | {sig.side}")
+                log.info(f"SKIP cooldown | {symbol} | {sig.side}")
 
         except Exception as e:
-            log.warning(f"ERR {raw_symbol} | {type(e).__name__}: {e}")
+            # Keep running even if one symbol fails
+            log.error(f"ERR {symbol} | {type(e).__name__}: {e}")
+
 
 # ---------------------------
-# Bot thread
+# Entry point
 # ---------------------------
-def bot_worker():
+def main():
     load_dotenv()
 
-    log.info("Starting Bitget Futures Swing Bot (worker thread)")
-    log.info(f"SCAN_ON_CANDLE_CLOSE=True | SYMBOLS={len(SYMBOLS)}")
+    run_mode = os.getenv("RUN_MODE", "worker").lower()  # "worker" or "web"
+    scan_on_close = os.getenv("SCAN_ON_CANDLE_CLOSE", "1") == "1"
+    scan_interval = int(os.getenv("SCAN_INTERVAL_SECONDS", "60"))
 
-    ex = make_exchange()
-    log.info("Exchange client initialized")
+    # If deployed as Web Service, run a health endpoint so Render sees it as "up"
+    if run_mode == "web":
+        Thread(target=start_health_server, daemon=True).start()
 
-    # One-time test mode
-    if os.getenv("TEST_TELEGRAM", "0") == "1":
-        try:
-            send_telegram("🚀 TEST: main.py Telegram working successfully!")
-            log.info("Test Telegram message sent.")
-        except Exception as e:
-            log.error(f"Telegram test failed: {e}")
-        return
+    log.info("Starting Bitget Futures Analysis Bot")
+    log.info(f"RUN_MODE={run_mode} | SCAN_ON_CANDLE_CLOSE={scan_on_close} | SYMBOLS={len(SYMBOLS)}")
 
-    # Optional startup ping
-    if os.getenv("TEST_TELEGRAM_ON_START", "0") == "1":
-        try:
-            send_telegram("✅ Bot started on Render and can send Telegram messages.")
-            log.info("Startup Telegram test sent (TEST_TELEGRAM_ON_START=1)")
-        except Exception as e:
-            log.warning(f"Startup Telegram test failed: {e}")
+    # Create exchange once; if it fails due to network, we will retry with backoff
+    base_backoff = 5
+    max_backoff = 180
+
+    ex = None
 
     while True:
         try:
-            run_scan_cycle(ex)
-            sleep_until_next_15m_close()
-        except Exception as e:
-            log.error(f"FATAL | {type(e).__name__}: {e}")
-            time.sleep(10)
+            if ex is None:
+                ex = make_exchange()
+                log.info("Exchange client initialized")
 
-# ---------------------------
-# Entry
-# ---------------------------
+            run_scan_cycle(ex)
+
+            if scan_on_close:
+                # Sleep until next 15m candle close
+                wait = seconds_until_next_15m_close()
+                log.info(f"Sleeping until next 15m close: {wait}s")
+                time.sleep(wait)
+            else:
+                # Fixed interval scan
+                time.sleep(max(10, scan_interval))
+
+            # reset backoff after successful cycle
+            base_backoff = 5
+
+        except KeyboardInterrupt:
+            log.info("Received KeyboardInterrupt. Exiting.")
+            break
+
+        except Exception as e:
+            # If anything critical happens, log and retry with exponential backoff
+            log.error(f"FATAL | {type(e).__name__}: {e}")
+            ex = None  # force re-init exchange on next loop
+
+            # exponential backoff with jitter
+            sleep_for = min(max_backoff, base_backoff) + random.randint(0, 3)
+            log.info(f"Retrying in {sleep_for}s...")
+            time.sleep(sleep_for)
+            base_backoff = min(max_backoff, base_backoff * 2)
+
+
 if __name__ == "__main__":
-    bot_worker()   # only for local run
+    main()
