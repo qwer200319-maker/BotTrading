@@ -135,10 +135,4 @@ def bot_worker():
 # Entry
 # ---------------------------
 if __name__ == "__main__":
-    # Start bot in background so Flask can bind PORT
-    t = threading.Thread(target=bot_worker, daemon=True)
-    t.start()
-
-    port = int(os.getenv("PORT", "10000"))
-    log.info(f"Starting web server on 0.0.0.0:{port}")
-    app.run(host="0.0.0.0", port=port)
+    bot_worker()   # only for local run
