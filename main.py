@@ -1,15 +1,12 @@
-# main.py — production-ready for Render (Background Worker or Web Service)
+# main.py — production-ready for Render (Background Worker)
 #
 # ✅ Features:
 # - Stable infinite loop with backoff + jitter (prevents crash loops)
 # - Scans on 15m candle close by default (less spam + fewer API calls)
 # - Cooldown/dedup remains handled in notifier.py (if you already have it)
 # - Structured logging (Render shows logs in dashboard)
-# - Optional lightweight /health HTTP endpoint (works if you deploy as Web Service)
 #
 # Environment variables (set in Render dashboard):
-# - RUN_MODE: "worker" (default) or "web"
-# - PORT: (Render sets this automatically for web services)
 # - SCAN_ON_CANDLE_CLOSE: "1" (default) or "0"
 # - SCAN_INTERVAL_SECONDS: default 60 (used when SCAN_ON_CANDLE_CLOSE=0)
 #
@@ -22,8 +19,6 @@ import time
 import random
 import logging
 from datetime import datetime, timezone
-from threading import Thread
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from dotenv import load_dotenv
 
@@ -41,33 +36,6 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 log = logging.getLogger("bot")
-
-
-# ---------------------------
-# Optional health server (for Render Web Service)
-# ---------------------------
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path in ("/", "/health", "/healthz"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b"ok")
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, fmt, *args):
-        # reduce noisy HTTP logs
-        return
-
-
-def start_health_server():
-    port = int(os.getenv("PORT", "10000"))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    log.info(f"Health server listening on 0.0.0.0:{port}")
-    server.serve_forever()
-
 
 # ---------------------------
 # Scheduling helpers
@@ -152,16 +120,11 @@ def run_scan_cycle(ex):
 def main():
     load_dotenv()
 
-    run_mode = os.getenv("RUN_MODE", "worker").lower()  # "worker" or "web"
     scan_on_close = os.getenv("SCAN_ON_CANDLE_CLOSE", "1") == "1"
     scan_interval = int(os.getenv("SCAN_INTERVAL_SECONDS", "60"))
 
-    # If deployed as Web Service, run a health endpoint so Render sees it as "up"
-    if run_mode == "web":
-        Thread(target=start_health_server, daemon=True).start()
-
     log.info("Starting Bitget Futures Analysis Bot")
-    log.info(f"RUN_MODE={run_mode} | SCAN_ON_CANDLE_CLOSE={scan_on_close} | SYMBOLS={len(SYMBOLS)}")
+    log.info(f"SCAN_ON_CANDLE_CLOSE={scan_on_close} | SYMBOLS={len(SYMBOLS)}")
 
     # Create exchange once; if it fails due to network, we will retry with backoff
     base_backoff = 5
