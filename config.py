@@ -15,6 +15,8 @@ PARAMS = {
   "ma_mid": 14,
   "ma_slow": 28,
   "ma_slope_min_pct": 0.0001,     # 0.01% per candle
+  "ma_align_tol_pct": 0.001,      # 0.1% tolerance for MA alignment
+  "price_tol_pct": 0.001,         # 0.1% tolerance for price vs MA
 
   "atr_len": 14,
   "min_rr": 2.0,

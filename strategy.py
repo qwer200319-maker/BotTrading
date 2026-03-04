@@ -50,6 +50,14 @@ def _slope_ok(ma: pd.Series, i: int, direction: str, min_pct: float) -> bool:
     return pct <= -min_pct
 
 
+def _gt_tol(a: float, b: float, tol_pct: float) -> bool:
+    return a >= b * (1 - tol_pct)
+
+
+def _lt_tol(a: float, b: float, tol_pct: float) -> bool:
+    return a <= b * (1 + tol_pct)
+
+
 def _last_closed_index(df: pd.DataFrame) -> int:
     """
     Returns index of the most recent fully closed candle.
@@ -186,6 +194,8 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     ma_mid = int(p.get("ma_mid", 14))
     ma_slow = int(p.get("ma_slow", 28))
     ma_slope_min_pct = float(p.get("ma_slope_min_pct", p.get("ma28_slope_min_pct", 0.0001)))
+    ma_align_tol_pct = float(p.get("ma_align_tol_pct", 0.001))
+    price_tol_pct = float(p.get("price_tol_pct", 0.001))
     pullback_lookback = int(p.get("pullback_lookback", 2))
     pullback_body_max_ratio = float(p.get("pullback_body_max_ratio", 0.45))
     pullback_range_max_atr = p.get("pullback_range_max_atr", 1.0)
@@ -220,17 +230,19 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     last_ma28_1h = float(ma28_1h.iloc[bias_i])
 
     long_trend = (
-        last_ma7_1h > last_ma14_1h > last_ma28_1h
-        and last_close_1h > last_ma7_1h
-        and last_close_1h >= last_ma28_1h
+        _gt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
+        and _gt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
+        and _gt_tol(last_close_1h, last_ma7_1h, price_tol_pct)
+        and _gt_tol(last_close_1h, last_ma28_1h, price_tol_pct)
         and _slope_ok(ma7_1h, bias_i, "up", ma_slope_min_pct)
         and _slope_ok(ma14_1h, bias_i, "up", ma_slope_min_pct)
         and _slope_ok(ma28_1h, bias_i, "up", ma_slope_min_pct)
     )
     short_trend = (
-        last_ma7_1h < last_ma14_1h < last_ma28_1h
-        and last_close_1h < last_ma7_1h
-        and last_close_1h <= last_ma28_1h
+        _lt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
+        and _lt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
+        and _lt_tol(last_close_1h, last_ma7_1h, price_tol_pct)
+        and _lt_tol(last_close_1h, last_ma28_1h, price_tol_pct)
         and _slope_ok(ma7_1h, bias_i, "down", ma_slope_min_pct)
         and _slope_ok(ma14_1h, bias_i, "down", ma_slope_min_pct)
         and _slope_ok(ma28_1h, bias_i, "down", ma_slope_min_pct)
@@ -270,7 +282,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         if not _slope_ok(ma28_15, sig_i, "up", ma_slope_min_pct):
             return _fail("long_ma28_slope")
 
-        if not (ma7_sig > ma14_sig > ma28_sig):
+        if not (_gt_tol(ma7_sig, ma14_sig, ma_align_tol_pct) and _gt_tol(ma14_sig, ma28_sig, ma_align_tol_pct)):
             return _fail("long_alignment")
 
         pullback_ok = low_sig <= ma14_sig or low_sig <= ma28_sig
@@ -286,7 +298,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         if not bull_confirm:
             return _fail("long_confirm_candle")
 
-        if close_sig <= ma7_sig:
+        if not _gt_tol(close_sig, ma7_sig, price_tol_pct):
             return _fail("long_close_below_ma7")
 
         score += 10  # pullback
@@ -310,7 +322,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         if not _slope_ok(ma28_15, sig_i, "down", ma_slope_min_pct):
             return _fail("short_ma28_slope")
 
-        if not (ma7_sig < ma14_sig < ma28_sig):
+        if not (_lt_tol(ma7_sig, ma14_sig, ma_align_tol_pct) and _lt_tol(ma14_sig, ma28_sig, ma_align_tol_pct)):
             return _fail("short_alignment")
 
         pullback_ok = high_sig >= ma14_sig or high_sig >= ma28_sig
@@ -326,7 +338,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         if not bear_confirm:
             return _fail("short_confirm_candle")
 
-        if close_sig >= ma7_sig:
+        if not _lt_tol(close_sig, ma7_sig, price_tol_pct):
             return _fail("short_close_above_ma7")
 
         score += 10
