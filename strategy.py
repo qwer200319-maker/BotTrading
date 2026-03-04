@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import pandas as pd
 
 @dataclass
@@ -48,6 +49,25 @@ def _slope_ok(ma: pd.Series, i: int, direction: str, min_pct: float) -> bool:
     return pct <= -min_pct
 
 
+def _last_closed_index(df: pd.DataFrame) -> int:
+    """
+    Returns index of the most recent fully closed candle.
+    If exchange includes the live candle, this returns -2; otherwise -1.
+    """
+    if len(df) < 3:
+        return -2
+    ts_last = df["ts"].iloc[-1]
+    ts_prev = df["ts"].iloc[-2]
+    period_sec = (ts_last - ts_prev).total_seconds()
+    if period_sec <= 0:
+        return -2
+    now = datetime.now(timezone.utc)
+    # If last candle's full period has elapsed, it's closed
+    if ts_last + pd.Timedelta(seconds=period_sec) <= now:
+        return -1
+    return -2
+
+
 def _strong_candle(df: pd.DataFrame, i: int, direction: str, min_body_ratio: float, close_near_ratio: float, max_wick_ratio: float) -> bool:
     o = float(df["open"].iloc[i])
     c = float(df["close"].iloc[i])
@@ -91,6 +111,12 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
       strong candle close near high/low, and not overextended from MA28
     """
 
+    detect.last_reason = ""
+
+    def _fail(reason: str):
+        detect.last_reason = reason
+        return None
+
     ma_fast = int(p.get("ma_fast", 7))
     ma_mid = int(p.get("ma_mid", 14))
     ma_slow = int(p.get("ma_slow", 28))
@@ -110,7 +136,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
 
     min_rows = max(ma_slow, int(p.get("atr_len", 14))) + 3
     if len(df15) < min_rows or len(df1h) < min_rows:
-        return None
+        return _fail("not_enough_rows")
 
     # -------------------
     # 1H Trend/Bias
@@ -121,7 +147,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     ma28_1h = _ma(c1, ma_slow)
 
     # Use last fully closed 1H candle
-    bias_i = -2
+    bias_i = _last_closed_index(df1h)
     last_close_1h = float(c1.iloc[bias_i])
     last_ma7_1h = float(ma7_1h.iloc[bias_i])
     last_ma14_1h = float(ma14_1h.iloc[bias_i])
@@ -139,7 +165,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     )
 
     if not long_trend and not short_trend:
-        return None
+        return _fail("no_1h_trend")
 
     # -------------------
     # 15m Entry
@@ -151,8 +177,8 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     atr15 = _atr(df15, p["atr_len"])
 
     # Use the last fully closed 15m candle (avoid the live candle)
-    sig_i = -2
-    prev_i = -3
+    sig_i = _last_closed_index(df15)
+    prev_i = sig_i - 1
     close_sig = float(c15.iloc[sig_i])
     high_sig = float(df15["high"].iloc[sig_i])
     low_sig = float(df15["low"].iloc[sig_i])
@@ -162,10 +188,10 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     atr_sig = float(atr15.iloc[sig_i]) if pd.notna(atr15.iloc[sig_i]) else None
 
     if atr_sig is None or atr_sig <= 0:
-        return None
+        return _fail("atr_invalid")
 
     if not pd.notna(ma7_15.iloc[prev_i]) or not pd.notna(ma14_15.iloc[prev_i]) or not pd.notna(ma28_15.iloc[prev_i]):
-        return None
+        return _fail("ma_nan")
 
     score = 0
     score += 30  # trend
@@ -173,33 +199,28 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     if long_trend:
         # MA28 slope must be up (avoid flat/sideways)
         if not _slope_ok(ma28_15, sig_i, "up", ma28_slope_min_pct):
-            return None
+            return _fail("long_ma28_slope")
 
         # Pullback to MA14 or MA28 (touch)
         pullback_ok = low_sig <= ma14_sig or low_sig <= ma28_sig
         if not pullback_ok:
-            return None
+            return _fail("long_pullback")
 
         # MA alignment still bullish on 15m
         if not (ma7_sig > ma14_sig > ma28_sig):
-            return None
+            return _fail("long_alignment")
 
         # Candle close above MA7
         if close_sig <= ma7_sig:
-            return None
+            return _fail("long_close_below_ma7")
 
         # Close must remain above MA28 (structure intact)
         if close_sig <= ma28_sig:
-            return None
-
-        # Not overextended from MA28
-        dist_pct = abs(close_sig - ma28_sig) / max(abs(ma28_sig), 1e-9)
-        if dist_pct > max_ma28_dist_pct:
-            return None
+            return _fail("long_close_below_ma28")
 
         # Strong bullish candle (body >= 60%, close near high)
         if not _strong_candle(df15, sig_i, "bull", body_min_ratio, close_near_ratio, wick_max_ratio):
-            return None
+            return _fail("long_strong_candle")
 
         # Not overextended from MA28 (percent OR ATR-based)
         dist_pct = abs(close_sig - ma28_sig) / max(abs(ma28_sig), 1e-9)
@@ -207,7 +228,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         dist_pct_ok = dist_pct <= max_ma28_dist_pct
         dist_atr_ok = True if max_ma28_dist_atr is None else dist_atr <= max_ma28_dist_atr
         if not (dist_pct_ok or dist_atr_ok):
-            return None
+            return _fail("long_overextended")
 
         score += 10  # pullback
         score += 20  # alignment
@@ -217,7 +238,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         sl = entry - float(p["atr_mult"]) * atr_sig
         risk = entry - sl
         if risk <= 0:
-            return None
+            return _fail("long_risk_invalid")
 
         tp1 = entry + float(p["min_rr"]) * risk
         tp2 = entry + best_rr * risk
@@ -230,24 +251,24 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     else:
         # MA28 slope must be down (avoid flat/sideways)
         if not _slope_ok(ma28_15, sig_i, "down", ma28_slope_min_pct):
-            return None
+            return _fail("short_ma28_slope")
 
         # Pullback to MA14 or MA28 (touch)
         pullback_ok = high_sig >= ma14_sig or high_sig >= ma28_sig
         if not pullback_ok:
-            return None
+            return _fail("short_pullback")
 
         # MA alignment still bearish on 15m
         if not (ma7_sig < ma14_sig < ma28_sig):
-            return None
+            return _fail("short_alignment")
 
         # Candle close below MA7
         if close_sig >= ma7_sig:
-            return None
+            return _fail("short_close_above_ma7")
 
         # Close must remain below MA28 (structure intact)
         if close_sig >= ma28_sig:
-            return None
+            return _fail("short_close_above_ma28")
 
         # Not overextended from MA28
         dist_pct = abs(close_sig - ma28_sig) / max(abs(ma28_sig), 1e-9)
@@ -256,7 +277,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
 
         # Strong bearish candle (body >= 60%, close near low)
         if not _strong_candle(df15, sig_i, "bear", body_min_ratio, close_near_ratio, wick_max_ratio):
-            return None
+            return _fail("short_strong_candle")
 
         # Not overextended from MA28 (percent OR ATR-based)
         dist_pct = abs(close_sig - ma28_sig) / max(abs(ma28_sig), 1e-9)
@@ -264,7 +285,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         dist_pct_ok = dist_pct <= max_ma28_dist_pct
         dist_atr_ok = True if max_ma28_dist_atr is None else dist_atr <= max_ma28_dist_atr
         if not (dist_pct_ok or dist_atr_ok):
-            return None
+            return _fail("short_overextended")
 
         score += 10
         score += 20
@@ -274,7 +295,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         sl = entry + float(p["atr_mult"]) * atr_sig
         risk = sl - entry
         if risk <= 0:
-            return None
+            return _fail("short_risk_invalid")
 
         tp1 = entry - float(p["min_rr"]) * risk
         tp2 = entry - best_rr * risk
@@ -285,12 +306,12 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         side = "SHORT"
 
     if rr < float(p["min_rr"]):
-        return None
+        return _fail("rr_below_min")
 
     if rr < rr_hard_min:
-        return None
+        return _fail("rr_below_hard_min")
 
     if score < int(p.get("min_score", 55)):
-        return None
+        return _fail("score_below_min")
 
     return Signal(symbol, side, entry, sl, tp1, tp2, rr, score, reason, invalidate)

@@ -86,7 +86,7 @@ def timedelta_minutes(m: int):
 # ---------------------------
 # Core scan logic (one cycle)
 # ---------------------------
-def run_scan_cycle(ex):
+def run_scan_cycle(ex, debug_signals: bool = False):
     """
     Scans all symbols once using 15m + 1h data only.
     Exceptions are handled per symbol to avoid whole-bot crash.
@@ -98,6 +98,9 @@ def run_scan_cycle(ex):
             # Strategy uses only 15m + 1h for now; keep df4h as None
             sig = detect(df15, df1h, symbol, PARAMS)
             if not sig:
+                if debug_signals:
+                    reason = getattr(detect, "last_reason", "no_reason")
+                    log.info(f"NO SIGNAL | {symbol} | {reason}")
                 continue
 
             # Dedup / cooldown by symbol + side (simple)
@@ -122,10 +125,22 @@ def main():
 
     scan_on_close = os.getenv("SCAN_ON_CANDLE_CLOSE", "1") == "1"
     scan_interval = int(os.getenv("SCAN_INTERVAL_SECONDS", "60"))
+    debug_signals = os.getenv("DEBUG_SIGNALS", "0") == "1"
 
     log.info("Starting Bitget Futures Analysis Bot")
     log.info(f"SCAN_ON_CANDLE_CLOSE={scan_on_close} | SYMBOLS={len(SYMBOLS)}")
     warn_missing_env()
+
+    # Optional one-time Telegram test
+    if os.getenv("SEND_TEST_TELEGRAM", "0") == "1":
+        try:
+            resp = send_telegram("Render bot online ✅")
+            if resp is not None and resp.status_code >= 400:
+                log.error(f"Telegram error: {resp.status_code} | {resp.text}")
+            else:
+                log.info("Telegram test message sent")
+        except Exception as e:
+            log.error(f"Telegram test failed: {type(e).__name__}: {e}")
 
     # Create exchange once; if it fails due to network, we will retry with backoff
     base_backoff = 5
@@ -139,7 +154,10 @@ def main():
                 ex = make_exchange()
                 log.info("Exchange client initialized")
 
-            run_scan_cycle(ex)
+            if debug_signals:
+                log.info("Starting scan cycle")
+
+            run_scan_cycle(ex, debug_signals)
 
             if scan_on_close:
                 # Sleep until next 15m candle close

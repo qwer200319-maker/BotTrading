@@ -27,8 +27,14 @@ def cooldown_ok(key, minutes):
 def send_telegram(text: str):
     token = os.getenv("TG_BOT_TOKEN")
     chat_id = os.getenv("TG_CHAT_ID")
+    if not token or not chat_id:
+        raise ValueError("Missing TG_BOT_TOKEN or TG_CHAT_ID")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True}, timeout=10)
+    return requests.post(
+        url,
+        json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+        timeout=10,
+    )
 
 def format_signal(sig):
     return (
