@@ -82,11 +82,11 @@ def _strong_candle(df: pd.DataFrame, i: int, direction: str, min_body_ratio: flo
     return True
 
 
-def detect(df15: pd.DataFrame, df1h: pd.DataFrame, df4h: pd.DataFrame, symbol: str, p: dict):
+def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     """
     Scalping Mode (MA 7/14/28):
     - Trend/Bias (1H): MA7 > MA14 > MA28 (long) or MA7 < MA14 < MA28 (short)
-    - Entry (15m): confirmed candle close with pullback to MA14/28,
+    - Entry (15m): confirmed close with pullback to MA14/28,
       MA alignment intact, MA28 slope in trend direction,
       strong candle close near high/low, and not overextended from MA28
     """

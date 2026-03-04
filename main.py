@@ -28,6 +28,24 @@ from strategy import detect
 from notifier import cooldown_ok, send_telegram, format_signal
 
 # ---------------------------
+# Env checks
+# ---------------------------
+REQUIRED_ENVS = [
+    "BITGET_API_KEY",
+    "BITGET_API_SECRET",
+    "BITGET_API_PASSPHRASE",
+    "TG_BOT_TOKEN",
+    "TG_CHAT_ID",
+]
+
+
+def warn_missing_env():
+    missing = [k for k in REQUIRED_ENVS if not os.getenv(k)]
+    if missing:
+        log.warning(f"Missing env vars: {', '.join(missing)}")
+
+
+# ---------------------------
 # Logging
 # ---------------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -46,26 +64,8 @@ def seconds_until_next_15m_close() -> int:
     Adds a small delay buffer (2-5s) to ensure candle is closed on exchange side.
     """
     now = datetime.now(timezone.utc)
-    minute = now.minute
-    # Next boundary at minute 0, 15, 30, 45
-    next_minute = ((minute // 15) + 1) * 15
-    next_hour = now.hour
-    next_day = now.date()
-
-    if next_minute >= 60:
-        next_minute = 0
-        next_hour += 1
-        if next_hour >= 24:
-            next_hour = 0
-            # move to next day (simple; datetime handles)
-            next_dt = datetime(
-                now.year, now.month, now.day, 0, 0, 0, tzinfo=timezone.utc
-            ) + (datetime.now(timezone.utc).date() - next_day)  # no-op
-            # easier: just add 1 hour and then round, but keep simple below
-
-    # Build next boundary datetime robustly by adding minutes until boundary
     # Compute delta minutes to next boundary:
-    delta_minutes = (15 - (minute % 15)) % 15
+    delta_minutes = (15 - (now.minute % 15)) % 15
     if delta_minutes == 0:
         delta_minutes = 15
     target = now.replace(second=0, microsecond=0) + timedelta_minutes(delta_minutes)
@@ -88,15 +88,15 @@ def timedelta_minutes(m: int):
 # ---------------------------
 def run_scan_cycle(ex):
     """
-    Scans all symbols once. Exceptions are handled per symbol to avoid whole-bot crash.
+    Scans all symbols once using 15m + 1h data only.
+    Exceptions are handled per symbol to avoid whole-bot crash.
     """
     for symbol in SYMBOLS:
         try:
             df15 = fetch_ohlcv_df(ex, symbol, TIMEFRAMES["entry"], limit=300)
             df1h = fetch_ohlcv_df(ex, symbol, TIMEFRAMES["bias"], limit=300)
-            df4h = fetch_ohlcv_df(ex, symbol, TIMEFRAMES["regime"], limit=300)
-
-            sig = detect(df15, df1h, df4h, symbol, PARAMS)
+            # Strategy uses only 15m + 1h for now; keep df4h as None
+            sig = detect(df15, df1h, symbol, PARAMS)
             if not sig:
                 continue
 
@@ -125,6 +125,7 @@ def main():
 
     log.info("Starting Bitget Futures Analysis Bot")
     log.info(f"SCAN_ON_CANDLE_CLOSE={scan_on_close} | SYMBOLS={len(SYMBOLS)}")
+    warn_missing_env()
 
     # Create exchange once; if it fails due to network, we will retry with backoff
     base_backoff = 5

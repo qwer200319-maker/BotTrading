@@ -8,7 +8,6 @@ SYMBOLS = [
 TIMEFRAMES = {
     "entry": "15m",
     "bias": "1h",
-    "regime": "4h",
 }
 
 PARAMS = {
