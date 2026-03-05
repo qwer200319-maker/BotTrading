@@ -92,6 +92,29 @@ def _bearish_engulfing(df: pd.DataFrame, i: int) -> bool:
     return (c < o) and (pc > po) and (c <= po) and (o >= pc)
 
 
+def _body_ratio(df: pd.DataFrame, i: int) -> float:
+    o = float(df["open"].iloc[i])
+    c = float(df["close"].iloc[i])
+    h = float(df["high"].iloc[i])
+    l = float(df["low"].iloc[i])
+    rng = h - l
+    if rng <= 0:
+        return 0.0
+    return abs(c - o) / rng
+
+
+def _bullish_body_confirm(df: pd.DataFrame, i: int, min_body_ratio: float) -> bool:
+    o = float(df["open"].iloc[i])
+    c = float(df["close"].iloc[i])
+    return c > o and _body_ratio(df, i) >= min_body_ratio
+
+
+def _bearish_body_confirm(df: pd.DataFrame, i: int, min_body_ratio: float) -> bool:
+    o = float(df["open"].iloc[i])
+    c = float(df["close"].iloc[i])
+    return c < o and _body_ratio(df, i) >= min_body_ratio
+
+
 def _bullish_pinbar(df: pd.DataFrame, i: int, body_max_ratio: float, wick_body_mult: float, opp_wick_max_mult: float) -> bool:
     o = float(df["open"].iloc[i])
     c = float(df["close"].iloc[i])
@@ -199,13 +222,20 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     pullback_lookback = int(p.get("pullback_lookback", 2))
     pullback_body_max_ratio = float(p.get("pullback_body_max_ratio", 0.45))
     pullback_range_max_atr = p.get("pullback_range_max_atr", 1.0)
+    pullback_dist_pct = float(p.get("pullback_dist_pct", 0.002))
+    pullback_dist_atr = p.get("pullback_dist_atr", 0.5)
     if pullback_range_max_atr is not None:
         pullback_range_max_atr = float(pullback_range_max_atr)
         if pullback_range_max_atr <= 0:
             pullback_range_max_atr = None
+    if pullback_dist_atr is not None:
+        pullback_dist_atr = float(pullback_dist_atr)
+        if pullback_dist_atr <= 0:
+            pullback_dist_atr = None
     pinbar_body_max_ratio = float(p.get("pinbar_body_max_ratio", 0.35))
     pinbar_wick_body_mult = float(p.get("pinbar_wick_body_mult", 2.5))
     pinbar_opp_wick_max_mult = float(p.get("pinbar_opp_wick_max_mult", 1.0))
+    confirm_body_min_ratio = float(p.get("confirm_body_min_ratio", 0.45))
     swing_lookback = int(p.get("swing_lookback", 5))
     sl_atr_buffer = float(p.get("sl_atr_buffer", 0.0))
     rr_hard_min = float(p.get("rr_hard_min", p.get("min_rr", 2.0)))
@@ -285,15 +315,21 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         if not (_gt_tol(ma7_sig, ma14_sig, ma_align_tol_pct) and _gt_tol(ma14_sig, ma28_sig, ma_align_tol_pct)):
             return _fail("long_alignment")
 
-        pullback_ok = low_sig <= ma14_sig or low_sig <= ma28_sig
+        pullback_touch = low_sig <= ma14_sig or low_sig <= ma28_sig
+        dist_to_ma = min(abs(close_sig - ma14_sig), abs(close_sig - ma28_sig))
+        dist_pct_ok = dist_to_ma / max(abs(close_sig), 1e-9) <= pullback_dist_pct
+        dist_atr_ok = True if pullback_dist_atr is None else dist_to_ma <= pullback_dist_atr * atr_sig
+        pullback_ok = pullback_touch or dist_pct_ok or dist_atr_ok
         if not pullback_ok:
             return _fail("long_pullback_touch")
 
         if not _pullback_small(df15, atr15, sig_i, pullback_lookback, pullback_body_max_ratio, pullback_range_max_atr):
             return _fail("long_pullback_momentum")
 
-        bull_confirm = _bullish_engulfing(df15, sig_i) or _bullish_pinbar(
-            df15, sig_i, pinbar_body_max_ratio, pinbar_wick_body_mult, pinbar_opp_wick_max_mult
+        bull_confirm = (
+            _bullish_engulfing(df15, sig_i)
+            or _bullish_pinbar(df15, sig_i, pinbar_body_max_ratio, pinbar_wick_body_mult, pinbar_opp_wick_max_mult)
+            or _bullish_body_confirm(df15, sig_i, confirm_body_min_ratio)
         )
         if not bull_confirm:
             return _fail("long_confirm_candle")
@@ -325,15 +361,21 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         if not (_lt_tol(ma7_sig, ma14_sig, ma_align_tol_pct) and _lt_tol(ma14_sig, ma28_sig, ma_align_tol_pct)):
             return _fail("short_alignment")
 
-        pullback_ok = high_sig >= ma14_sig or high_sig >= ma28_sig
+        pullback_touch = high_sig >= ma14_sig or high_sig >= ma28_sig
+        dist_to_ma = min(abs(close_sig - ma14_sig), abs(close_sig - ma28_sig))
+        dist_pct_ok = dist_to_ma / max(abs(close_sig), 1e-9) <= pullback_dist_pct
+        dist_atr_ok = True if pullback_dist_atr is None else dist_to_ma <= pullback_dist_atr * atr_sig
+        pullback_ok = pullback_touch or dist_pct_ok or dist_atr_ok
         if not pullback_ok:
             return _fail("short_pullback_touch")
 
         if not _pullback_small(df15, atr15, sig_i, pullback_lookback, pullback_body_max_ratio, pullback_range_max_atr):
             return _fail("short_pullback_momentum")
 
-        bear_confirm = _bearish_engulfing(df15, sig_i) or _bearish_pinbar(
-            df15, sig_i, pinbar_body_max_ratio, pinbar_wick_body_mult, pinbar_opp_wick_max_mult
+        bear_confirm = (
+            _bearish_engulfing(df15, sig_i)
+            or _bearish_pinbar(df15, sig_i, pinbar_body_max_ratio, pinbar_wick_body_mult, pinbar_opp_wick_max_mult)
+            or _bearish_body_confirm(df15, sig_i, confirm_body_min_ratio)
         )
         if not bear_confirm:
             return _fail("short_confirm_candle")
