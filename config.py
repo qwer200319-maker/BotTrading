@@ -18,6 +18,8 @@ PARAMS = {
   "ma_align_tol_pct": 0.003,      # 0.3% tolerance for MA alignment
   "price_tol_pct": 0.003,         # 0.3% tolerance for price vs MA
   "bias_relaxed": True,
+  "bias_mode": "ma7_ma28",
+  "bias_use_slope": False,
 
   "atr_len": 14,
   "min_rr": 1.5,

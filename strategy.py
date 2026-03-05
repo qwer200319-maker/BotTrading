@@ -220,6 +220,8 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     ma_align_tol_pct = float(p.get("ma_align_tol_pct", 0.001))
     price_tol_pct = float(p.get("price_tol_pct", 0.001))
     bias_relaxed = bool(p.get("bias_relaxed", False))
+    bias_mode = str(p.get("bias_mode", "strict")).lower()
+    bias_use_slope = bool(p.get("bias_use_slope", True))
     pullback_lookback = int(p.get("pullback_lookback", 2))
     pullback_body_max_ratio = float(p.get("pullback_body_max_ratio", 0.45))
     pullback_range_max_atr = p.get("pullback_range_max_atr", 1.0)
@@ -260,16 +262,25 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     last_ma14_1h = float(ma14_1h.iloc[bias_i])
     last_ma28_1h = float(ma28_1h.iloc[bias_i])
 
-    if bias_relaxed:
+    def _slope_or_ok(ma: pd.Series, i: int, direction: str) -> bool:
+        return _slope_ok(ma, i, direction, ma_slope_min_pct) if bias_use_slope else True
+
+    if bias_mode == "ma7_ma28":
+        long_trend = _gt_tol(last_ma7_1h, last_ma28_1h, ma_align_tol_pct) and _slope_or_ok(ma28_1h, bias_i, "up")
+        short_trend = _lt_tol(last_ma7_1h, last_ma28_1h, ma_align_tol_pct) and _slope_or_ok(ma28_1h, bias_i, "down")
+    elif bias_mode == "ma7_ma14":
+        long_trend = _gt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct) and _slope_or_ok(ma14_1h, bias_i, "up")
+        short_trend = _lt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct) and _slope_or_ok(ma14_1h, bias_i, "down")
+    elif bias_relaxed:
         long_trend = (
             _gt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
             and _gt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
-            and _slope_ok(ma28_1h, bias_i, "up", ma_slope_min_pct)
+            and _slope_or_ok(ma28_1h, bias_i, "up")
         )
         short_trend = (
             _lt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
             and _lt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
-            and _slope_ok(ma28_1h, bias_i, "down", ma_slope_min_pct)
+            and _slope_or_ok(ma28_1h, bias_i, "down")
         )
     else:
         long_trend = (
@@ -277,18 +288,18 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
             and _gt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
             and _gt_tol(last_close_1h, last_ma7_1h, price_tol_pct)
             and _gt_tol(last_close_1h, last_ma28_1h, price_tol_pct)
-            and _slope_ok(ma7_1h, bias_i, "up", ma_slope_min_pct)
-            and _slope_ok(ma14_1h, bias_i, "up", ma_slope_min_pct)
-            and _slope_ok(ma28_1h, bias_i, "up", ma_slope_min_pct)
+            and _slope_or_ok(ma7_1h, bias_i, "up")
+            and _slope_or_ok(ma14_1h, bias_i, "up")
+            and _slope_or_ok(ma28_1h, bias_i, "up")
         )
         short_trend = (
             _lt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
             and _lt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
             and _lt_tol(last_close_1h, last_ma7_1h, price_tol_pct)
             and _lt_tol(last_close_1h, last_ma28_1h, price_tol_pct)
-            and _slope_ok(ma7_1h, bias_i, "down", ma_slope_min_pct)
-            and _slope_ok(ma14_1h, bias_i, "down", ma_slope_min_pct)
-            and _slope_ok(ma28_1h, bias_i, "down", ma_slope_min_pct)
+            and _slope_or_ok(ma7_1h, bias_i, "down")
+            and _slope_or_ok(ma14_1h, bias_i, "down")
+            and _slope_or_ok(ma28_1h, bias_i, "down")
         )
 
     if not long_trend and not short_trend:
