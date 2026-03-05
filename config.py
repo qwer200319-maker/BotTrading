@@ -17,6 +17,7 @@ PARAMS = {
   "ma_slope_min_pct": 0.0,        # allow flat MA for aggressive signals
   "ma_align_tol_pct": 0.003,      # 0.3% tolerance for MA alignment
   "price_tol_pct": 0.003,         # 0.3% tolerance for price vs MA
+  "bias_relaxed": True,
 
   "atr_len": 14,
   "min_rr": 1.5,
