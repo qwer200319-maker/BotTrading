@@ -227,6 +227,10 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     pullback_range_max_atr = p.get("pullback_range_max_atr", 1.0)
     pullback_dist_pct = float(p.get("pullback_dist_pct", 0.002))
     pullback_dist_atr = p.get("pullback_dist_atr", 0.5)
+    pullback_require_touch = bool(p.get("pullback_require_touch", True))
+    pullback_require_small = bool(p.get("pullback_require_small", True))
+    confirm_mode = str(p.get("confirm_mode", "strict")).lower()
+    require_ma28_slope_15m = bool(p.get("require_ma28_slope_15m", True))
     if pullback_range_max_atr is not None:
         pullback_range_max_atr = float(pullback_range_max_atr)
         if pullback_range_max_atr <= 0:
@@ -333,7 +337,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     score += 30  # trend
 
     if long_trend:
-        if not _slope_ok(ma28_15, sig_i, "up", ma_slope_min_pct):
+        if require_ma28_slope_15m and not _slope_ok(ma28_15, sig_i, "up", ma_slope_min_pct):
             return _fail("long_ma28_slope")
 
         if not (_gt_tol(ma7_sig, ma14_sig, ma_align_tol_pct) and _gt_tol(ma14_sig, ma28_sig, ma_align_tol_pct)):
@@ -343,18 +347,23 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         dist_to_ma = min(abs(close_sig - ma14_sig), abs(close_sig - ma28_sig))
         dist_pct_ok = dist_to_ma / max(abs(close_sig), 1e-9) <= pullback_dist_pct
         dist_atr_ok = True if pullback_dist_atr is None else dist_to_ma <= pullback_dist_atr * atr_sig
-        pullback_ok = pullback_touch or dist_pct_ok or dist_atr_ok
+        pullback_ok = (pullback_touch or dist_pct_ok or dist_atr_ok) if pullback_require_touch else (dist_pct_ok or dist_atr_ok or pullback_touch)
         if not pullback_ok:
             return _fail("long_pullback_touch")
 
-        if not _pullback_small(df15, atr15, sig_i, pullback_lookback, pullback_body_max_ratio, pullback_range_max_atr):
+        if pullback_require_small and not _pullback_small(
+            df15, atr15, sig_i, pullback_lookback, pullback_body_max_ratio, pullback_range_max_atr
+        ):
             return _fail("long_pullback_momentum")
 
-        bull_confirm = (
-            _bullish_engulfing(df15, sig_i)
-            or _bullish_pinbar(df15, sig_i, pinbar_body_max_ratio, pinbar_wick_body_mult, pinbar_opp_wick_max_mult)
-            or _bullish_body_confirm(df15, sig_i, confirm_body_min_ratio)
-        )
+        if confirm_mode == "loose":
+            bull_confirm = _bullish_body_confirm(df15, sig_i, confirm_body_min_ratio)
+        else:
+            bull_confirm = (
+                _bullish_engulfing(df15, sig_i)
+                or _bullish_pinbar(df15, sig_i, pinbar_body_max_ratio, pinbar_wick_body_mult, pinbar_opp_wick_max_mult)
+                or _bullish_body_confirm(df15, sig_i, confirm_body_min_ratio)
+            )
         if not bull_confirm:
             return _fail("long_confirm_candle")
 
@@ -379,7 +388,7 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         side = "LONG"
 
     else:
-        if not _slope_ok(ma28_15, sig_i, "down", ma_slope_min_pct):
+        if require_ma28_slope_15m and not _slope_ok(ma28_15, sig_i, "down", ma_slope_min_pct):
             return _fail("short_ma28_slope")
 
         if not (_lt_tol(ma7_sig, ma14_sig, ma_align_tol_pct) and _lt_tol(ma14_sig, ma28_sig, ma_align_tol_pct)):
@@ -389,18 +398,23 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
         dist_to_ma = min(abs(close_sig - ma14_sig), abs(close_sig - ma28_sig))
         dist_pct_ok = dist_to_ma / max(abs(close_sig), 1e-9) <= pullback_dist_pct
         dist_atr_ok = True if pullback_dist_atr is None else dist_to_ma <= pullback_dist_atr * atr_sig
-        pullback_ok = pullback_touch or dist_pct_ok or dist_atr_ok
+        pullback_ok = (pullback_touch or dist_pct_ok or dist_atr_ok) if pullback_require_touch else (dist_pct_ok or dist_atr_ok or pullback_touch)
         if not pullback_ok:
             return _fail("short_pullback_touch")
 
-        if not _pullback_small(df15, atr15, sig_i, pullback_lookback, pullback_body_max_ratio, pullback_range_max_atr):
+        if pullback_require_small and not _pullback_small(
+            df15, atr15, sig_i, pullback_lookback, pullback_body_max_ratio, pullback_range_max_atr
+        ):
             return _fail("short_pullback_momentum")
 
-        bear_confirm = (
-            _bearish_engulfing(df15, sig_i)
-            or _bearish_pinbar(df15, sig_i, pinbar_body_max_ratio, pinbar_wick_body_mult, pinbar_opp_wick_max_mult)
-            or _bearish_body_confirm(df15, sig_i, confirm_body_min_ratio)
-        )
+        if confirm_mode == "loose":
+            bear_confirm = _bearish_body_confirm(df15, sig_i, confirm_body_min_ratio)
+        else:
+            bear_confirm = (
+                _bearish_engulfing(df15, sig_i)
+                or _bearish_pinbar(df15, sig_i, pinbar_body_max_ratio, pinbar_wick_body_mult, pinbar_opp_wick_max_mult)
+                or _bearish_body_confirm(df15, sig_i, confirm_body_min_ratio)
+            )
         if not bear_confirm:
             return _fail("short_confirm_candle")
 

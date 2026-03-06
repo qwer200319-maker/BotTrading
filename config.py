@@ -22,20 +22,24 @@ PARAMS = {
   "bias_use_slope": False,
 
   "atr_len": 14,
-  "min_rr": 1.5,
-  "rr_hard_min": 1.3,
+  "min_rr": 1.3,
+  "rr_hard_min": 1.2,
   "best_rr": 2.0,
 
-  "pullback_lookback": 2,
+  "pullback_lookback": 1,
   "pullback_body_max_ratio": 0.75,
   "pullback_range_max_atr": 2.0,
   "pullback_dist_pct": 0.004,     # 0.4% distance allowed
   "pullback_dist_atr": 0.8,       # or 0.8x ATR distance allowed
+  "pullback_require_touch": False,
+  "pullback_require_small": False,
 
   "pinbar_body_max_ratio": 0.50,
   "pinbar_wick_body_mult": 2.0,
   "pinbar_opp_wick_max_mult": 1.5,
-  "confirm_body_min_ratio": 0.35,
+  "confirm_body_min_ratio": 0.30,
+  "confirm_mode": "loose",
+  "require_ma28_slope_15m": False,
 
   "swing_lookback": 5,
   "sl_atr_buffer": 0.0,
