@@ -32,14 +32,20 @@ def send_telegram(text: str):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     return requests.post(
         url,
-        json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        },
         timeout=10,
     )
 
 def format_signal(sig):
+    side_label = "🟢 <b>LONG</b>" if sig.side == "LONG" else "🔴 <b>SHORT</b>"
     return (
-        f"Pair: {sig.symbol}\n"
-        f"Side: {sig.side}\n"
+        f"Pair: <b>{sig.symbol}</b>\n"
+        f"Side: {side_label}\n"
         f"Entry: {sig.entry:.4f}\n"
         f"SL: {sig.sl:.4f}\n"
         f"TP1: {sig.tp1:.4f} | TP2: {sig.tp2:.4f}\n"
