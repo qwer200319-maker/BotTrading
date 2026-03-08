@@ -76,6 +76,40 @@ def _last_closed_index(df: pd.DataFrame) -> int:
     return -2
 
 
+def _sign_diff(a: float, b: float, eps_pct: float) -> int:
+    if b != 0 and eps_pct > 0.0:
+        if abs(a - b) <= abs(b) * eps_pct:
+            return 0
+    if a > b:
+        return 1
+    if a < b:
+        return -1
+    return 0
+
+
+def _count_crosses(a: pd.Series, b: pd.Series, end_i: int, lookback: int, eps_pct: float) -> int:
+    if lookback <= 1 or len(a) < 2:
+        return 0
+    n = len(a)
+    end_pos = end_i if end_i >= 0 else n + end_i
+    if end_pos < 1:
+        return 0
+    start_pos = max(1, end_pos - lookback + 1)
+    prev_sign = 0
+    crosses = 0
+    for pos in range(start_pos, end_pos + 1):
+        sign = _sign_diff(float(a.iloc[pos]), float(b.iloc[pos]), eps_pct)
+        if sign == 0:
+            continue
+        if prev_sign == 0:
+            prev_sign = sign
+            continue
+        if sign != prev_sign:
+            crosses += 1
+            prev_sign = sign
+    return crosses
+
+
 def _bullish_engulfing(df: pd.DataFrame, i: int) -> bool:
     o = float(df["open"].iloc[i])
     c = float(df["close"].iloc[i])
@@ -219,9 +253,16 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     ma_slope_min_pct = float(p.get("ma_slope_min_pct", p.get("ma28_slope_min_pct", 0.0001)))
     ma_align_tol_pct = float(p.get("ma_align_tol_pct", 0.001))
     price_tol_pct = float(p.get("price_tol_pct", 0.001))
+    bias_slope_min_pct = float(p.get("bias_slope_min_pct", ma_slope_min_pct))
+    bias_align_tol_pct = float(p.get("bias_align_tol_pct", ma_align_tol_pct))
+    bias_price_tol_pct = float(p.get("bias_price_tol_pct", price_tol_pct))
     bias_relaxed = bool(p.get("bias_relaxed", False))
     bias_mode = str(p.get("bias_mode", "strict")).lower()
     bias_use_slope = bool(p.get("bias_use_slope", True))
+    bias_chop_lookback = int(p.get("bias_chop_lookback", 6))
+    bias_ma_cross_max = p.get("bias_ma_cross_max", 1)
+    bias_price_cross_max = p.get("bias_price_cross_max", 2)
+    bias_cross_eps_pct = float(p.get("bias_cross_eps_pct", 0.0))
     pullback_lookback = int(p.get("pullback_lookback", 2))
     pullback_body_max_ratio = float(p.get("pullback_body_max_ratio", 0.45))
     pullback_range_max_atr = p.get("pullback_range_max_atr", 1.0)
@@ -267,40 +308,48 @@ def detect(df15: pd.DataFrame, df1h: pd.DataFrame, symbol: str, p: dict):
     last_ma28_1h = float(ma28_1h.iloc[bias_i])
 
     def _slope_or_ok(ma: pd.Series, i: int, direction: str) -> bool:
-        return _slope_ok(ma, i, direction, ma_slope_min_pct) if bias_use_slope else True
+        return _slope_ok(ma, i, direction, bias_slope_min_pct) if bias_use_slope else True
+
+    if bias_chop_lookback >= 2:
+        ma_crosses = _count_crosses(ma7_1h, ma14_1h, bias_i, bias_chop_lookback, bias_cross_eps_pct)
+        price_crosses = _count_crosses(c1, ma14_1h, bias_i, bias_chop_lookback, bias_cross_eps_pct)
+        if bias_ma_cross_max is not None and ma_crosses > int(bias_ma_cross_max):
+            return _fail("no_1h_chop")
+        if bias_price_cross_max is not None and price_crosses > int(bias_price_cross_max):
+            return _fail("no_1h_chop")
 
     if bias_mode == "ma7_ma28":
-        long_trend = _gt_tol(last_ma7_1h, last_ma28_1h, ma_align_tol_pct) and _slope_or_ok(ma28_1h, bias_i, "up")
-        short_trend = _lt_tol(last_ma7_1h, last_ma28_1h, ma_align_tol_pct) and _slope_or_ok(ma28_1h, bias_i, "down")
+        long_trend = _gt_tol(last_ma7_1h, last_ma28_1h, bias_align_tol_pct) and _slope_or_ok(ma28_1h, bias_i, "up")
+        short_trend = _lt_tol(last_ma7_1h, last_ma28_1h, bias_align_tol_pct) and _slope_or_ok(ma28_1h, bias_i, "down")
     elif bias_mode == "ma7_ma14":
-        long_trend = _gt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct) and _slope_or_ok(ma14_1h, bias_i, "up")
-        short_trend = _lt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct) and _slope_or_ok(ma14_1h, bias_i, "down")
+        long_trend = _gt_tol(last_ma7_1h, last_ma14_1h, bias_align_tol_pct) and _slope_or_ok(ma14_1h, bias_i, "up")
+        short_trend = _lt_tol(last_ma7_1h, last_ma14_1h, bias_align_tol_pct) and _slope_or_ok(ma14_1h, bias_i, "down")
     elif bias_relaxed:
         long_trend = (
-            _gt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
-            and _gt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
+            _gt_tol(last_ma7_1h, last_ma14_1h, bias_align_tol_pct)
+            and _gt_tol(last_ma14_1h, last_ma28_1h, bias_align_tol_pct)
             and _slope_or_ok(ma28_1h, bias_i, "up")
         )
         short_trend = (
-            _lt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
-            and _lt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
+            _lt_tol(last_ma7_1h, last_ma14_1h, bias_align_tol_pct)
+            and _lt_tol(last_ma14_1h, last_ma28_1h, bias_align_tol_pct)
             and _slope_or_ok(ma28_1h, bias_i, "down")
         )
     else:
         long_trend = (
-            _gt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
-            and _gt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
-            and _gt_tol(last_close_1h, last_ma7_1h, price_tol_pct)
-            and _gt_tol(last_close_1h, last_ma28_1h, price_tol_pct)
+            _gt_tol(last_ma7_1h, last_ma14_1h, bias_align_tol_pct)
+            and _gt_tol(last_ma14_1h, last_ma28_1h, bias_align_tol_pct)
+            and _gt_tol(last_close_1h, last_ma7_1h, bias_price_tol_pct)
+            and _gt_tol(last_close_1h, last_ma28_1h, bias_price_tol_pct)
             and _slope_or_ok(ma7_1h, bias_i, "up")
             and _slope_or_ok(ma14_1h, bias_i, "up")
             and _slope_or_ok(ma28_1h, bias_i, "up")
         )
         short_trend = (
-            _lt_tol(last_ma7_1h, last_ma14_1h, ma_align_tol_pct)
-            and _lt_tol(last_ma14_1h, last_ma28_1h, ma_align_tol_pct)
-            and _lt_tol(last_close_1h, last_ma7_1h, price_tol_pct)
-            and _lt_tol(last_close_1h, last_ma28_1h, price_tol_pct)
+            _lt_tol(last_ma7_1h, last_ma14_1h, bias_align_tol_pct)
+            and _lt_tol(last_ma14_1h, last_ma28_1h, bias_align_tol_pct)
+            and _lt_tol(last_close_1h, last_ma7_1h, bias_price_tol_pct)
+            and _lt_tol(last_close_1h, last_ma28_1h, bias_price_tol_pct)
             and _slope_or_ok(ma7_1h, bias_i, "down")
             and _slope_or_ok(ma14_1h, bias_i, "down")
             and _slope_or_ok(ma28_1h, bias_i, "down")

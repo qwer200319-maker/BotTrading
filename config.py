@@ -14,12 +14,19 @@ PARAMS = {
   "ma_fast": 7,
   "ma_mid": 14,
   "ma_slow": 28,
-  "ma_slope_min_pct": 0.0,        # allow flat MA for aggressive signals
+  "ma_slope_min_pct": 0.0,        # 15m slope check (only if enabled)
   "ma_align_tol_pct": 0.003,      # 0.3% tolerance for MA alignment
   "price_tol_pct": 0.003,         # 0.3% tolerance for price vs MA
-  "bias_relaxed": True,
-  "bias_mode": "ma7_ma28",
-  "bias_use_slope": False,
+  "bias_relaxed": False,
+  "bias_mode": "strict",
+  "bias_use_slope": True,
+  "bias_slope_min_pct": 0.0001,   # 1H: MA slopes must be rising/falling
+  "bias_align_tol_pct": 0.0,      # 1H: MA7 > MA14 > MA28 (no tolerance)
+  "bias_price_tol_pct": 0.0,      # 1H: close must stay above/below MA7 + MA28
+  "bias_chop_lookback": 6,        # 1H: lookback window for chop filter
+  "bias_ma_cross_max": 1,         # 1H: max MA7/MA14 crosses allowed
+  "bias_price_cross_max": 2,      # 1H: max close/MA14 crosses allowed
+  "bias_cross_eps_pct": 0.001,    # 1H: ignore near-equal diffs within 0.1%
 
   "atr_len": 14,
   "min_rr": 1.3,
