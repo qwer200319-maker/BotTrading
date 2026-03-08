@@ -29,8 +29,8 @@ PARAMS = {
   "bias_cross_eps_pct": 0.001,    # 1H: ignore near-equal diffs within 0.1%
 
   "atr_len": 14,
-  "min_rr": 1.3,
-  "rr_hard_min": 1.2,
+  "min_rr": 1.8,
+  "rr_hard_min": 1.6,
   "best_rr": 2.0,
 
   "pullback_lookback": 1,
