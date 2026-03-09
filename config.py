@@ -14,7 +14,7 @@ PARAMS = {
   "ma_fast": 7,
   "ma_mid": 14,
   "ma_slow": 28,
-  "ma_slope_min_pct": 0.0,        # 15m slope check (only if enabled)
+  "ma_slope_min_pct": 0.0001,     # 15m slope check (only if enabled)
   "ma_align_tol_pct": 0.003,      # 0.3% tolerance for MA alignment
   "price_tol_pct": 0.003,         # 0.3% tolerance for price vs MA
   "bias_relaxed": False,
@@ -29,24 +29,24 @@ PARAMS = {
   "bias_cross_eps_pct": 0.001,    # 1H: ignore near-equal diffs within 0.1%
 
   "atr_len": 14,
-  "min_rr": 1.8,
-  "rr_hard_min": 1.6,
-  "best_rr": 2.0,
+  "min_rr": 3.0,
+  "rr_hard_min": 3.0,
+  "best_rr": 3.0,
 
-  "pullback_lookback": 1,
-  "pullback_body_max_ratio": 0.75,
-  "pullback_range_max_atr": 2.0,
-  "pullback_dist_pct": 0.004,     # 0.4% distance allowed
-  "pullback_dist_atr": 0.8,       # or 0.8x ATR distance allowed
-  "pullback_require_touch": False,
-  "pullback_require_small": False,
+  "pullback_lookback": 2,
+  "pullback_body_max_ratio": 0.45,
+  "pullback_range_max_atr": 1.2,
+  "pullback_dist_pct": 0.003,     # 0.3% distance allowed
+  "pullback_dist_atr": 0.6,       # or 0.6x ATR distance allowed
+  "pullback_require_touch": True,
+  "pullback_require_small": True,
 
-  "pinbar_body_max_ratio": 0.50,
-  "pinbar_wick_body_mult": 2.0,
-  "pinbar_opp_wick_max_mult": 1.5,
-  "confirm_body_min_ratio": 0.30,
-  "confirm_mode": "loose",
-  "require_ma28_slope_15m": False,
+  "pinbar_body_max_ratio": 0.35,
+  "pinbar_wick_body_mult": 2.5,
+  "pinbar_opp_wick_max_mult": 1.0,
+  "confirm_body_min_ratio": 0.45,
+  "confirm_mode": "strict",
+  "require_ma28_slope_15m": True,
 
   "swing_lookback": 5,
   "sl_atr_buffer": 0.0,
